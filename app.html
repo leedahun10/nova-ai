@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>NOVA 음성 비서</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=IBM+Plex+Sans+KR:wght@400;500;700&family=Share+Tech+Mono&display=swap">
+<style>
+:root{
+  --bg:#03070a; --line:#1b3a40; --cy:#5fe6f0; --cy2:#a9f3f8; --dim:#4c7a80;
+  --red:#ff5a52; --amb:#ffb03a; --grn:#3ee08a; --blu:#4c9bff; --txt:#d6f6f8;
+  --f-disp:'Orbitron','IBM Plex Sans KR',sans-serif;
+  --f-body:'IBM Plex Sans KR',system-ui,sans-serif;
+  --f-mono:'Share Tech Mono',ui-monospace,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--txt);font-family:var(--f-body);overflow:hidden;
+  padding-left:max(0px,env(safe-area-inset-left,0px));padding-right:max(0px,env(safe-area-inset-right,0px))}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block}
+.ui{position:fixed;left:0;right:0;display:flex;flex-direction:column;align-items:center;gap:10px;pointer-events:none;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+#top{top:calc(env(safe-area-inset-top,0px) + 14px)}
+#bottom{bottom:calc(env(safe-area-inset-bottom,0px) + 16px)}
+#brand{font-family:var(--f-disp);letter-spacing:.35em;font-size:13px;color:var(--cy)}
+#state{font-family:var(--f-mono);font-size:12px;letter-spacing:.2em;color:var(--dim)}
+#said{font-size:15px;color:var(--dim);min-height:22px;text-align:center;max-width:640px}
+#reply{font-size:clamp(20px,5.2vw,30px);font-weight:500;color:var(--cy2);text-align:center;max-width:720px;
+  text-wrap:balance;min-height:40px;text-shadow:0 0 18px rgba(95,230,240,.45)}
+.row{display:flex;gap:8px;width:100%;max-width:560px;pointer-events:auto}
+button,input{font-family:var(--f-body);font-size:15px;border-radius:10px;border:1px solid var(--line);background:rgba(8,22,26,.85);color:var(--txt)}
+button{padding:12px 16px;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid var(--cy);outline-offset:2px}
+#go{flex:1;font-family:var(--f-disp);letter-spacing:.15em;color:var(--bg);background:var(--cy);border-color:var(--cy);font-weight:700}
+#go.on{background:transparent;color:var(--cy)}
+#txt{flex:1;padding:12px 14px;min-width:0}
+#set{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:16px;z-index:5}
+.card{background:#071216;border:1px solid var(--line);border-radius:14px;padding:20px;width:100%;max-width:440px;display:flex;flex-direction:column;gap:12px}
+.card h2{font-family:var(--f-disp);font-size:15px;letter-spacing:.2em;color:var(--cy);margin:0}
+.card label{font-size:13px;color:var(--dim);display:flex;flex-direction:column;gap:6px}
+.card input{padding:10px 12px}
+.card p{font-size:13px;color:var(--dim);margin:0;line-height:1.6}
+#hint{font-size:12px;color:var(--dim);text-align:center;font-family:var(--f-mono)}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="ui" id="top">
+  <div id="brand">N O V A</div>
+  <div id="state">STANDBY</div>
+</div>
+
+<div class="ui" id="bottom">
+  <div id="said"></div>
+  <div id="reply">시작 버튼을 누르세요</div>
+  <div id="hint">박수 두 번 · 말하기 버튼 · 또는 입력</div>
+  <div class="row">
+    <button id="go">시작</button>
+    <button id="talk">말하기</button>
+    <button id="gear" aria-label="설정">설정</button>
+  </div>
+  <form class="row" id="f">
+    <input id="txt" placeholder="오늘 매출 알려줘" autocomplete="off">
+    <button>전송</button>
+  </form>
+</div>
+
+<div id="set" hidden>
+  <div class="card">
+    <h2>SETTINGS</h2>
+    <label>Claude API 키 (없으면 기본 응답만 해요)
+      <input id="key" type="password" placeholder="sk-ant-...">
+    </label>
+    <label>데이터 서버 주소 (스마트스토어 연결용, 비워두면 예시 데이터)
+      <input id="srv" placeholder="https://xxxx.trycloudflare.com" autocomplete="off">
+    </label>
+    <label>호출 이름
+      <input id="wake" value="노바">
+    </label>
+    <label>박수 감도 (낮을수록 예민)
+      <input id="sens" type="range" min="0.15" max="0.8" step="0.05" value="0.35">
+    </label>
+    <p>API 키는 이 브라우저에만 저장돼요. 키는 console.anthropic.com 에서 발급받을 수 있어요.</p>
+    <button id="close">저장</button>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const store={get(k,d){try{return localStorage.getItem(k)??d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+let cfg={srv:store.get('nova_srv',''),key:store.get('nova_key',''),wake:store.get('nova_wake','노바'),sens:parseFloat(store.get('nova_sens','0.35'))};
+$('key').value=cfg.key;$('srv').value=cfg.srv;$('wake').value=cfg.wake;$('sens').value=cfg.sens;
+$('gear').onclick=()=>$('set').hidden=false;
+$('close').onclick=()=>{cfg.key=$('key').value.trim();cfg.srv=$('srv').value.trim().replace(/\/+$/,'');store.set('nova_srv',cfg.srv);fetchShop();cfg.wake=$('wake').value.trim()||'노바';cfg.sens=parseFloat($('sens').value);
+  store.set('nova_key',cfg.key);store.set('nova_wake',cfg.wake);store.set('nova_sens',cfg.sens);$('set').hidden=true;
+  };
+
+/* ---------- 예시 쇼핑몰 데이터 (실제 연동 전 데모) ---------- */
+const shop={orders:3,growth:2.0,today:1000,month:5500,lastMonth:4500,visitors:260,status:'EXAMPLE',live:false};
+async function fetchShop(){
+  if(!cfg.srv){shop.status='EXAMPLE';return;}
+  try{
+    const r=await fetch(cfg.srv+'/shop',{cache:'no-store'});const d=await r.json();
+    if(!r.ok||!d.live)throw new Error(d.error||r.status);
+    Object.assign(shop,{live:true,status:'LIVE',orders:d.todayOrders,today:Math.round(d.todaySales/10000),month:Math.round(d.monthSales/10000),monthOrders:d.monthOrders,todayWon:d.todaySales,monthWon:d.monthSales});
+  }catch(e){shop.status='OFFLINE';shop.live=false;$('hint').textContent='데이터 서버에 연결할 수 없어요. 집 컴퓨터의 start.bat 이 켜져 있는지 확인해 주세요.';}
+}
+setInterval(fetchShop,5*60*1000);
+
+/* ---------- 상태 ---------- */
+let mode='off';           // off | idle | listen | think | speak
+let level=0, flash=0, speakAmp=0;
+const setMode=m=>{mode=m;$('state').textContent={off:'OFFLINE',idle:'STANDBY',listen:'LISTENING',think:'PROCESSING',speak:'SPEAKING'}[m];};
+
+/* ---------- 목소리 (TTS) ---------- */
+let voice=null;
+function pickVoice(){const vs=speechSynthesis.getVoices().filter(v=>v.lang.startsWith('ko'));
+  voice=vs.find(v=>/Google|Neural|Natural|Yuna|Sun-Hi|SunHi/i.test(v.name))||vs[0]||null;}
+if('speechSynthesis' in window){pickVoice();speechSynthesis.onvoiceschanged=pickVoice;}
+function speak(text){
+  $('reply').textContent=text;
+  return new Promise(res=>{
+    if(!('speechSynthesis' in window)){res();return;}
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text);u.lang='ko-KR';if(voice)u.voice=voice;u.rate=1.05;u.pitch=0.95;
+    setMode('speak');
+    u.onboundary=()=>{speakAmp=1};
+    u.onend=u.onerror=()=>{setMode(running?'idle':'off');res();};
+    speechSynthesis.speak(u);
+  });
+}
+
+/* ---------- 두뇌 ---------- */
+const history=[];
+function systemPrompt(){
+  const data=shop.live
+    ? `실제 스마트스토어 데이터: 오늘 결제 주문 ${shop.orders}건, 오늘 매출 ${shop.todayWon.toLocaleString()}원, 이번 달 주문 ${shop.monthOrders}건, 이번 달 매출 ${shop.monthWon.toLocaleString()}원. 방문자 수는 아직 연결되지 않았어.`
+    : `예시 쇼핑몰 데이터(실제 아님): 오늘 주문 ${shop.orders}건, 오늘 매출 ${shop.today}만원, 이번 달 매출 ${shop.month}만원, 지난달 ${shop.lastMonth}만원, 방문자 ${shop.visitors}명.`;
+  return `너는 쇼핑몰 운영을 돕는 한국어 음성 AI 비서 "${cfg.wake}"이야.
+대답은 소리 내어 읽히니까 1~3문장, 마크다운·이모지·목록 없이 자연스러운 존댓말로 짧게 말해.
+${data}
+모르는 건 지어내지 말고 모른다고 말해.`;
+}
+async function think(q){
+  setMode('think');
+  if(cfg.key){
+    try{
+      history.push({role:'user',content:q});
+      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
+        headers:{'content-type':'application/json','x-api-key':cfg.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({model:'claude-haiku-5-5',max_tokens:300,system:systemPrompt(),messages:history.slice(-12)})});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error?.message||r.status);
+      const a=d.content.map(c=>c.text||'').join('').trim();
+      history.push({role:'assistant',content:a});
+      return a;
+    }catch(e){history.pop();return 'AI 연결에 실패했어요. 설정에서 API 키를 확인해 주세요.';}
+  }
+  return local(q);
+}
+function local(q){
+  const now=new Date();
+  if(/몇 ?시|시간/.test(q))return `지금은 ${now.getHours()}시 ${now.getMinutes()}분이에요.`;
+  if(/날짜|며칠|무슨 ?요일/.test(q))return `오늘은 ${now.getMonth()+1}월 ${now.getDate()}일 ${'일월화수목금토'[now.getDay()]}요일이에요.`;
+  if(/주문/.test(q))return `오늘 들어온 주문은 ${shop.orders}건이에요.`;
+  if(/매출|수익|돈/.test(q))return shop.live?`오늘 매출은 ${shop.todayWon.toLocaleString()}원, 이번 달은 ${shop.monthWon.toLocaleString()}원이에요.`:`예시 기준으로 오늘 매출은 ${shop.today}만 원, 이번 달은 ${shop.month}만 원이에요.`;
+  if(/방문|손님/.test(q))return shop.live?'방문자 수는 아직 연결되지 않았어요.':`예시 기준으로 오늘 방문자는 ${shop.visitors}명이에요.`;
+  if(/안녕|하이|반가/.test(q))return '안녕하세요. 무엇을 도와드릴까요?';
+  if(/고마|감사/.test(q))return '천만에요. 언제든 불러주세요.';
+  if(/누구|이름/.test(q))return `저는 ${cfg.wake}예요. 쇼핑몰 운영을 돕는 음성 비서예요.`;
+  if(/게시|올려|업로드/.test(q))return '알겠습니다. 웹사이트에 게시하겠습니다.';
+  return '설정에서 API 키를 넣어주시면 무엇이든 대답할 수 있어요.';
+}
+async function handle(q){
+  q=q.trim();if(!q)return;
+  $('said').textContent='“'+q+'”';
+  const a=await think(q);
+  await speak(a);
+}
+
+/* ---------- 음성 인식 ---------- */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+const isAndroid=/Android/i.test(navigator.userAgent);
+let bg=null, active=false, running=false, busy=false;
+
+function listenOnce(){
+  return new Promise(res=>{
+    if(!SR){res('');return;}
+    const r=new SR();r.lang='ko-KR';r.continuous=false;r.interimResults=true;r.maxAlternatives=1;
+    let final='',done=false;const end=v=>{if(!done){done=true;clearTimeout(to);res(v);}};
+    const to=setTimeout(()=>{try{r.stop()}catch(e){}},9000);
+    r.onresult=e=>{let t='';for(const x of e.results){t+=x[0].transcript;if(x.isFinal)final=t;}$('said').textContent=t;};
+    r.onerror=e=>{if(e.error==='not-allowed')$('hint').textContent='마이크 권한을 허용해 주세요.';};
+    r.onend=()=>end(final.trim()||$('said').textContent.trim());
+    try{r.start()}catch(e){end('');}
+  });
+}
+async function converse(greet){
+  if(busy||!running)return;busy=true;
+  stopBg();closeMic();
+  if(greet)await speak(greet);
+  setMode('listen');$('said').textContent='';
+  const t=await listenOnce();
+  if(t){await handle(t.replace(new RegExp('^'+cfg.wake+'[\\s,야아]*'),''));}
+  else{$('reply').textContent='잘 못 들었어요. 박수 두 번이나 말하기 버튼으로 다시 불러주세요.';}
+  busy=false;
+  if(running){await openMic();startBg();setMode('idle');}
+}
+/* PC: 이름으로 부르기 (안드로이드는 마이크를 동시에 못 써서 박수/버튼 방식) */
+function startBg(){
+  if(!SR||isAndroid||!running)return;
+  bg=new SR();bg.lang='ko-KR';bg.continuous=true;bg.interimResults=false;
+  bg.onresult=e=>{
+    if(busy)return;const t=e.results[e.results.length-1][0].transcript.trim();
+    const i=t.indexOf(cfg.wake);if(i<0)return;
+    const rest=t.slice(i+cfg.wake.length).replace(/^[\s,야아]+/,'');
+    if(rest.length>1){busy=true;stopBg();handle(rest).then(()=>{busy=false;startBg();});}
+    else converse('네, 부르셨어요?');
+  };
+  bg.onend=()=>{if(bg&&running&&!busy)try{bg.start()}catch(e){}};
+  try{bg.start()}catch(e){}
+}
+function stopBg(){if(bg){const b=bg;bg=null;try{b.abort()}catch(e){}}}
+
+/* ---------- 마이크 + 박수 감지 ---------- */
+let ac=null,stream=null,analyser=null,buf=null,avg=0.02,lastClap=0,clapCount=0;
+async function openMic(){
+  stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:false,autoGainControl:false}});
+  ac=ac||new (window.AudioContext||window.webkitAudioContext)();
+  if(ac.state==='suspended')await ac.resume();
+  analyser=ac.createAnalyser();analyser.fftSize=1024;buf=new Float32Array(analyser.fftSize);
+  ac.createMediaStreamSource(stream).connect(analyser);avg=0.02;
+}
+function closeMic(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;analyser=null;level=0;}
+function audioTick(now){
+  if(!analyser)return;
+  analyser.getFloatTimeDomainData(buf);
+  let peak=0,sum=0;for(const v of buf){const a=Math.abs(v);if(a>peak)peak=a;sum+=v*v;}
+  const rms=Math.sqrt(sum/buf.length);
+  level+= (Math.min(1,rms*6)-level)*0.3;
+  if(running&&!busy&&mode==='idle'&&peak>cfg.sens&&peak>avg*6&&now-lastClap>150){
+    flash=1;
+    if(now-lastClap<700){clapCount++;}else clapCount=1;
+    lastClap=now;
+    if(clapCount===2){clapCount=0;converse('네, 듣고 있어요.');}
+  }
+  avg+= (rms-avg)*0.05;
+}
+
+$('go').onclick=async()=>{
+  if(running){running=false;stopBg();closeMic();speechSynthesis.cancel();setMode('off');$('go').textContent='시작';$('go').classList.remove('on');return;}
+  running=true;$('go').textContent='정지';$('go').classList.add('on');
+  try{await openMic();}catch(e){$('hint').textContent='마이크를 열 수 없어요. 권한을 허용해 주세요.';}
+  busy=true;await speak(`시스템 온라인. 안녕하세요, ${cfg.wake}입니다.`);busy=false;
+  setMode('idle');startBg();
+};
+$('talk').onclick=async()=>{
+  if(!running){running=true;$('go').textContent='정지';$('go').classList.add('on');}
+  converse('');
+};
+$('f').onsubmit=e=>{e.preventDefault();const v=$('txt').value;$('txt').value='';handle(v);};
+
+/* ---------- HUD 렌더링 ---------- */
+const c=$('c'),x=c.getContext('2d');let W,H,D;
+function resize(){D=devicePixelRatio||1;W=innerWidth;H=innerHeight;c.width=W*D;c.height=H*D;x.setTransform(D,0,0,D,0,0);}
+addEventListener('resize',resize);resize();
+const C='95,230,240';
+const panels=[
+  {s:'L',col:'#ff5a52',lab:'TODAY ORDERS',val:()=>shop.orders},
+  {s:'L',col:'#ffb03a',lab:'MONTH ORDERS',val:()=>shop.live?shop.monthOrders:'—'},
+  {s:'L',col:'#3ee08a',lab:'TODAY',val:()=>'+'+shop.today.toLocaleString()+'만'},
+  {s:'L',col:'#4c9bff',lab:'THIS MONTH',val:()=>shop.month.toLocaleString()+'만'},
+  {s:'R',col:'#ffb03a',lab:'STATUS',val:()=>shop.status},
+  {s:'R',col:'#4c9bff',lab:'VISITORS',val:()=>shop.live?'—':shop.visitors},
+  {s:'R',col:'#4c9bff',lab:'DATA',val:()=>shop.live?'NAVER':'예시'},
+];
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let t=0;
+function frame(now){
+  audioTick(now);
+  if(mode==='speak')speakAmp=Math.max(speakAmp*0.9,0.35+0.35*Math.abs(Math.sin(now/90)));else speakAmp*=0.9;
+  flash*=0.92;t+=reduce?0.2:1;
+  x.fillStyle='#03070a';x.fillRect(0,0,W,H);
+  const narrow=W<700;
+  const cx=W/2, cy=narrow?H*0.31:H*0.45;
+  const R=Math.min(W*(narrow?0.40:0.26),H*(narrow?0.2:0.30));
+  const energy=Math.max(level*(mode==='listen'?1.4:0.6),speakAmp,flash);
+  const think=mode==='think'?1:0;
+  x.save();x.translate(cx,cy);
+  // 궤도 타원
+  x.strokeStyle=`rgba(${C},.25)`;x.lineWidth=1.2;
+  for(const [rx,ry,rot] of [[1.35,.45,-.25],[1.3,.38,.35]]){x.save();x.rotate(rot+Math.sin(t*.003)*.05);x.beginPath();x.ellipse(0,0,R*rx,R*ry,0,0,7);x.stroke();x.restore();}
+  // 점선 외곽
+  x.setLineDash([R*.06,R*.05]);x.strokeStyle=`rgba(${C},.35)`;x.beginPath();x.arc(0,0,R*1.05,t*-.002,t*-.002+6.28);x.stroke();x.setLineDash([]);
+  // 회전 호
+  x.shadowColor=`rgba(${C},.9)`;x.shadowBlur=14;
+  x.strokeStyle=`rgba(${C},1)`;x.lineWidth=R*.025;
+  const sp=.012+think*.05;
+  for(const o of [0,Math.PI]){x.beginPath();x.arc(0,0,R*.92,t*sp+o,t*sp+o+1.3+energy*.8);x.stroke();}
+  x.shadowBlur=0;
+  // 눈금
+  x.strokeStyle=`rgba(${C},.55)`;x.lineWidth=1;
+  x.beginPath();x.arc(0,0,R*.76,0,7);x.stroke();
+  for(let i=0;i<90;i++){const a=i/90*6.283-t*.004,r1=R*.68,r2=r1-(i%5?R*.03:R*.07)*(1+energy*1.5*(i%5?0:1));
+    x.beginPath();x.moveTo(Math.cos(a)*r1,Math.sin(a)*r1);x.lineTo(Math.cos(a)*r2,Math.sin(a)*r2);x.stroke();}
+  x.fillStyle=`rgba(${C},.75)`;x.font=`${Math.max(10,R*.055)}px 'Share Tech Mono',monospace`;x.textAlign='center';x.textBaseline='middle';
+  for(let i=0;i<12;i++){const a=i/12*6.283+t*.003;x.fillText(String(i*30).padStart(3,'0'),Math.cos(a)*R*.53,Math.sin(a)*R*.53);}
+  // 오디오 파형 링
+  if(analyser&&buf){x.strokeStyle=`rgba(${C},.8)`;x.lineWidth=1.5;x.beginPath();
+    for(let i=0;i<=128;i++){const a=i/128*6.283,v=buf[(i*4)%buf.length]*(mode==='speak'?0:1),r=R*.44+v*R*.5;
+      i?x.lineTo(Math.cos(a)*r,Math.sin(a)*r):x.moveTo(Math.cos(a)*r,Math.sin(a)*r);}x.stroke();}
+  // 코어
+  const cr=R*(.30+energy*.07);
+  const g=x.createRadialGradient(0,0,cr*.2,0,0,cr*1.9);
+  g.addColorStop(0,'rgba(220,252,255,1)');g.addColorStop(.45,`rgba(${C},.95)`);g.addColorStop(.55,`rgba(${C},.25)`);g.addColorStop(1,'rgba(0,0,0,0)');
+  x.fillStyle=g;x.beginPath();x.arc(0,0,cr*1.9,0,7);x.fill();
+  // 박수 파동
+  if(flash>.05){x.strokeStyle=`rgba(255,255,255,${flash})`;x.lineWidth=2;x.beginPath();x.arc(0,0,R*(1.1+(1-flash)*.6),0,7);x.stroke();}
+  // 생각 중 스캐너
+  if(think){x.strokeStyle=`rgba(${C},.9)`;x.lineWidth=3;const a=t*.08;x.beginPath();x.arc(0,0,R*.6,a,a+.6);x.stroke();}
+  x.restore();
+  // 패널
+  const pw=narrow?Math.min(150,W*.36):170, ph=narrow?40:56, gap=narrow?8:12;
+  const left=panels.filter(p=>p.s==='L'),right=panels.filter(p=>p.s==='R');
+  const baseY=narrow?cy+R*1.1+8:cy-((ph+gap)*4)/2;
+  function drawP(p,px,py){x.strokeStyle=p.col;x.lineWidth=1.5;x.strokeRect(px,py,pw,ph);
+    x.fillStyle=p.col;x.globalAlpha=.08;x.fillRect(px,py,pw,ph);x.globalAlpha=1;
+    x.textAlign='left';x.textBaseline='alphabetic';x.font=`10px 'Share Tech Mono',monospace`;x.fillText(p.lab,px+8,py+14);
+    x.font=`${narrow?16:20}px 'Share Tech Mono',monospace`;x.fillText(String(p.val()),px+8,py+ph-9);}
+  if(narrow){
+    const all=[left[0],left[2],right[0],left[3]];
+    all.forEach((p,i)=>drawP(p,(i%2?W/2+gap/2:W/2-gap/2-pw),baseY+Math.floor(i/2)*(ph+gap)));
+  }else{
+    left.forEach((p,i)=>drawP(p,24,baseY+i*(ph+gap)));
+    right.forEach((p,i)=>drawP(p,W-24-pw,baseY+i*(ph+gap)));
+  }
+  // 시계
+  const d=new Date();x.fillStyle=`rgba(${C},1)`;x.font=`14px 'Share Tech Mono',monospace`;x.textAlign='right';
+  if(!narrow)x.fillText(`${d.getHours()}시 ${d.getMinutes()}분 ${d.getSeconds()}초`,W-24,40);
+  x.textAlign='left';if(!narrow)x.fillText('SHOP OPERATIONS',24,40);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+fetchShop();
+</script>
+</body>
+</html>
